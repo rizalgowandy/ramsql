@@ -2,8 +2,6 @@ package parser
 
 import (
 	"testing"
-
-	"github.com/proullon/ramsql/engine/log"
 )
 
 func TestParserCreateTableSimple(t *testing.T) {
@@ -157,6 +155,11 @@ func TestInsertNumberWithBacktickQuote(t *testing.T) {
 	parse(query, 1, t)
 }
 
+func TestSelectNegativeNumber(t *testing.T) {
+	query := `select to_id, date from edges where from_id = -1 and edge_type = 3 order by id desc`
+	parse(query, 1, t)
+}
+
 func TestCreateTableWithKeywordName(t *testing.T) {
 	query := `CREATE TABLE test ("id" bigserial not null primary key, "name" text, "key" text)`
 	parse(query, 1, t)
@@ -262,6 +265,24 @@ func TestUnique(t *testing.T) {
 	}
 }
 
+func TestAlias(t *testing.T) {
+	queries := []string{
+		`SELECT p.test FROM probably_too_long_name AS p WHERE p.id = $1`,
+		`SELECT p.test FROM machin JOIN probably_too_long_name AS p ON p.id = machin.id`,
+	}
+
+	for _, q := range queries {
+		parse(q, 1, t)
+	}
+
+}
+
+func TestDecimal(t *testing.T) {
+	query := `CREATE TABLE IF NOT EXISTS "pokemon" (id BIGSERIAL PRIMARY KEY, fewefwefwe DECIMAL DEFAULT 34.234)`
+
+	parse(query, 1, t)
+}
+
 func TestNow(t *testing.T) {
 	query := `CREATE TABLE IF NOT EXISTS "pokemon" (id BIGSERIAL PRIMARY KEY, test TIMESTAMPZ DEFAULT NOW())`
 
@@ -273,7 +294,20 @@ func TestIndex(t *testing.T) {
 		`CREATE INDEX index_name ON table_name (col1, col2)`,
 		`CREATE UNIQUE INDEX index_name ON table_name (col1, col2)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS index_name ON table_name (col1, col2)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS index_name ON table_name (col1, col2 COLLATE NOCASE)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS index_name ON public.table_name (col1, col2 COLLATE NOCASE)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS index_name ON "foo"."table_name" (col1, col2 COLLATE NOCASE)`,
+		`CREATE INDEX IF NOT EXISTS "idx_products_deleted_at" ON "products" ("deleted_at")`,
+	}
+
+	for _, q := range queries {
+		parse(q, 1, t)
+	}
+}
+
+func TestReturning(t *testing.T) {
+	queries := []string{
+		`INSERT INTO test (foo, bar) VALUES ('foo', 'bar') RETURNING id`,
+		`INSERT INTO test (foo, bar) VALUES ('foo', 'bar') RETURNING "id"`,
 	}
 
 	for _, q := range queries {
@@ -294,8 +328,61 @@ func TestForeignKey(t *testing.T) {
 }
 */
 
+func TestSchema(t *testing.T) {
+	queries := []string{
+		`CREATE SCHEMA foo`,
+		`CREATE SCHEMA "foo"`,
+		`CREATE SCHEMA public`,
+		`CREATE TABLE "foo"."bar" (id BIGSERIAL, baz TEXT)`,
+		`CREATE TABLE public.bar (id BIGSERIAL, baz TEXT)`,
+	}
+
+	for _, q := range queries {
+		i := parse(q, 1, t)
+		d := i[0].Decls[0]
+		if d.Token != CreateToken {
+			t.Errorf("expected CreateToken (%d), got (%d)", CreateToken, d.Token)
+		}
+		if tableD, ok := d.Has(TableToken); ok {
+			if _, ok := tableD.Decl[0].Has(SchemaToken); !ok {
+				t.Errorf("expected TableToken to have Schema (%d) child", SchemaToken)
+				tableD.Stringy(0, t.Logf)
+			}
+		}
+	}
+
+	queries = []string{
+		`DROP TABLE public.bar`,
+		`DROP SCHEMA foo.bar`,
+	}
+
+	for _, q := range queries {
+		i := parse(q, 1, t)
+		d := i[0].Decls[0]
+		if d.Token != DropToken {
+			t.Errorf("expected DropToken (%d), got (%d)", DropToken, d.Token)
+		}
+	}
+}
+
+func TestArguments(t *testing.T) {
+
+	queries := []string{
+		`SELECT * FROM foo WHERE bar = $1 and enabled = true`,
+		`UPDATE foo SET bar = $1, elabled = $2 WHERE bar = $3`,
+		`SELECT * FROM foo WHERE bar = ? and enabled = true`,
+		`UPDATE foo SET bar = ?, elabled = ? WHERE bar = ?`,
+		`UPDATE foo SET bar = :bar, elabled = :enabled WHERE bar = :bar`,
+		`INSERT INTO test (data) VALUES ($1)`,
+		`INSERT INTO test (data) VALUES (?)`,
+	}
+
+	for _, q := range queries {
+		parse(q, 1, t)
+	}
+}
+
 func parse(query string, instructionNumber int, t *testing.T) []Instruction {
-	log.UseTestLogger(t)
 
 	parser := parser{}
 	lexer := lexer{}

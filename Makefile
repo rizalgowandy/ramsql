@@ -10,5 +10,18 @@ install: ## install binaries
 	go install ./...
 
 test: ## test
-	go test -v ./...
+	go test -timeout 10s ./...
 
+bench:
+	go test -bench=. -count 6 | tee newbench.txt
+	benchstat bench.txt newbench.txt | tee benchstat.txt
+
+report:
+	go test -coverprofile=cover.out ./...
+	go tool cover -html=cover.out
+
+format:
+	mdformat README.md
+
+doc: format
+	pkgsite --http localhost:8086
